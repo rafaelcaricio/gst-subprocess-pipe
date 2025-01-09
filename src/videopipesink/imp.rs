@@ -24,6 +24,8 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     )
 });
 
+static WAIT_FOR_EXIT_DEFAULT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
+
 // Plugin state
 struct State {
     child_process: Option<Child>,
@@ -37,11 +39,15 @@ struct State {
 #[derive(Debug, Clone)]
 struct Settings {
     cmd: String,
+    wait_for_exit: gst::ClockTime,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { cmd: String::new() }
+        Settings { 
+            cmd: String::new(),
+            wait_for_exit: WAIT_FOR_EXIT_DEFAULT,
+         }
     }
 }
 
@@ -75,31 +81,45 @@ impl ObjectSubclass for VideoPipeSink {
 impl ObjectImpl for VideoPipeSink {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
-            vec![glib::ParamSpecString::builder("cmd")
-                .nick("Command")
-                .blurb("Shell command to run")
-                .mutable_ready()
-                .build()]
+            vec![
+                glib::ParamSpecString::builder("cmd")
+                    .nick("Command")
+                    .blurb("Shell command to run")
+                    .mutable_ready()
+                    .build(),
+                glib::ParamSpecUInt64::builder("wait-for-exit")
+                    .nick("Wait for exit")
+                    .blurb("Wait time in nanoseconds for the subprocess to exit after the stdin pipe is closed")
+                    .default_value(0)
+                    .mutable_playing()
+                    .build(),
+            ]
         });
 
         PROPERTIES.as_ref()
     }
 
     fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+        let mut settings = self.settings.lock().unwrap();
         match pspec.name() {
             "cmd" => {
-                let mut settings = self.settings.lock().unwrap();
                 settings.cmd = value.get().expect("type checked upstream");
+            }
+            "wait-for-exit" => {
+                settings.wait_for_exit = value.get().expect("type checked upstream");
             }
             _ => unimplemented!(),
         }
     }
 
     fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+        let settings = self.settings.lock().unwrap();
         match pspec.name() {
             "cmd" => {
-                let settings = self.settings.lock().unwrap();
                 settings.cmd.to_value()
+            }
+            "wait-for-exit" => {
+                settings.wait_for_exit.to_value()
             }
             _ => unimplemented!(),
         }
@@ -252,8 +272,9 @@ impl BaseSinkImpl for VideoPipeSink {
 
             // Drop stdin to send EOF
             drop(child.stdin.take());
-            let wait_for_exit = gst::ClockTime::from_mseconds(100);
-            std::thread::sleep(wait_for_exit.into());
+
+            let settings = self.settings.lock().unwrap();
+            std::thread::sleep(settings.wait_for_exit.into());
 
             // Send SIGHUP
             #[cfg(unix)]
