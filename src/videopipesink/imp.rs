@@ -250,6 +250,11 @@ impl BaseSinkImpl for VideoPipeSink {
         if let Some(mut child) = state.child_process.take() {
             let pid = child.id();
 
+            // Drop stdin to send EOF
+            drop(child.stdin.take());
+            let wait_for_exit = gst::ClockTime::from_mseconds(100);
+            std::thread::sleep(wait_for_exit.into());
+
             // Send SIGHUP
             #[cfg(unix)]
             unsafe {
