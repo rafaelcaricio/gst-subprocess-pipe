@@ -29,7 +29,6 @@ static WAIT_FOR_EXIT_DEFAULT: gst::ClockTime = gst::ClockTime::from_mseconds(100
 // Plugin state
 struct State {
     child_process: Option<Child>,
-    video_info: Option<gst_video::VideoInfo>,
     cmd: String,
     stdout_thread: Option<thread::JoinHandle<()>>,
     stderr_thread: Option<thread::JoinHandle<()>>,
@@ -62,7 +61,6 @@ impl Default for VideoPipeSink {
             settings: Mutex::new(Settings::default()),
             state: Mutex::new(State {
                 child_process: None,
-                video_info: None,
                 cmd: String::new(),
                 stdout_thread: None,
                 stderr_thread: None,
@@ -144,15 +142,11 @@ impl ElementImpl for VideoPipeSink {
 
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            let caps = gst_video::VideoCapsBuilder::new()
-                .format_list(gst_video::VideoFormat::iter_raw())
-                .build();
-
             let sink_pad_template = gst::PadTemplate::new(
                 "sink",
                 gst::PadDirection::Sink,
                 gst::PadPresence::Always,
-                &caps,
+                &gst::Caps::new_any(),
             )
             .unwrap();
 
@@ -165,11 +159,6 @@ impl ElementImpl for VideoPipeSink {
 
 impl BaseSinkImpl for VideoPipeSink {
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
-        let mut state = self.state.lock().unwrap();
-        let info = gst_video::VideoInfo::from_caps(caps)
-            .map_err(|_| gst::loggable_error!(CAT, "Failed to parse caps"))?;
-
-        state.video_info = Some(info);
         gst::debug!(CAT, imp = self, "Caps set to: {}", caps);
         Ok(())
     }
@@ -306,19 +295,12 @@ impl BaseSinkImpl for VideoPipeSink {
             thread.join().unwrap();
         }
 
-        state.video_info = None;
-
         gst::info!(CAT, imp = self, "Stopped");
         Ok(())
     }
 
     fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
         let mut state = self.state.lock().unwrap();
-
-        let Some(_) = state.video_info else {
-            gst::error!(CAT, imp = self, "Video info not set");
-            return Err(gst::FlowError::NotNegotiated);
-        };
 
         // Get child process and check if it's still running
         let child = match &mut state.child_process {
