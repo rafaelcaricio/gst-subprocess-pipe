@@ -13,7 +13,6 @@ use gst_base::subclass::prelude::*;
 use once_cell::sync::Lazy;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
 
@@ -30,8 +29,8 @@ struct State {
     child_process: Option<Child>,
     video_info: Option<gst_video::VideoInfo>,
     cmd: String,
+    stdout_thread: Option<thread::JoinHandle<()>>,
     stderr_thread: Option<thread::JoinHandle<()>>,
-    stderr_rx: Option<mpsc::Receiver<String>>,
 }
 
 // Properties
@@ -59,8 +58,8 @@ impl Default for VideoPipeSink {
                 child_process: None,
                 video_info: None,
                 cmd: String::new(),
+                stdout_thread: None,
                 stderr_thread: None,
-                stderr_rx: None,
             }),
         }
     }
@@ -151,6 +150,7 @@ impl BaseSinkImpl for VideoPipeSink {
             .map_err(|_| gst::loggable_error!(CAT, "Failed to parse caps"))?;
 
         state.video_info = Some(info);
+        gst::debug!(CAT, imp = self, "Caps set to: {}", caps);
         Ok(())
     }
 
@@ -159,6 +159,7 @@ impl BaseSinkImpl for VideoPipeSink {
         let mut state = self.state.lock().unwrap();
 
         if settings.cmd.is_empty() {
+            gst::debug!(CAT, imp = self, "Command line not set");
             return Err(gst::error_msg!(
                 gst::ResourceError::Settings,
                 ["Command line not set"]
@@ -173,12 +174,15 @@ impl BaseSinkImpl for VideoPipeSink {
             )
         })?;
 
+        gst::info!(CAT, imp = self, "Starting subprocess with command: {}", settings.cmd);
+
         // Create command
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(&settings.cmd)
             .current_dir(current_dir)
             .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
@@ -188,26 +192,54 @@ impl BaseSinkImpl for VideoPipeSink {
                 )
             })?;
 
+        let pid = child.id();
+
+        // Setup stdout monitoring
+        let stdout = child.stdout.take().unwrap();
+
+        let stdout_thread = thread::spawn({
+            let this = self.downgrade();
+            move || {
+                use std::io::BufRead;
+                let reader = std::io::BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        let this = match this.upgrade() {
+                            Some(this) => this,
+                            None => return,
+                        };
+                        gst::debug!(CAT, imp = this, "stdout: {}", line);
+                    }
+                }
+            }
+        });
+
         // Setup stderr monitoring
         let stderr = child.stderr.take().unwrap();
-        let (tx, rx) = mpsc::channel();
 
-        let stderr_thread = thread::spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    let _ = tx.send(line);
+        let stderr_thread = thread::spawn({
+            let this = self.downgrade();
+            move || {
+                use std::io::BufRead;
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        let this = match this.upgrade() {
+                            Some(this) => this,
+                            None => return,
+                        };
+                        gst::warning!(CAT, imp = this, "stderr: {}", line);
+                    }
                 }
             }
         });
 
         state.child_process = Some(child);
+        state.stdout_thread = Some(stdout_thread);
         state.stderr_thread = Some(stderr_thread);
-        state.stderr_rx = Some(rx);
         state.cmd = settings.cmd.clone();
 
-        gst::info!(CAT, imp = self, "Started");
+        gst::info!(CAT, imp = self, "Started subprocess with PID: {}", pid);
         Ok(())
     }
 
@@ -216,6 +248,8 @@ impl BaseSinkImpl for VideoPipeSink {
 
         // Stop child process
         if let Some(mut child) = state.child_process.take() {
+            let pid = child.id();
+
             // Send SIGHUP
             #[cfg(unix)]
             unsafe {
@@ -225,22 +259,23 @@ impl BaseSinkImpl for VideoPipeSink {
             // Wait for process
             match child.wait() {
                 Ok(status) => {
-                    gst::info!(CAT, "Process exited with status {}", status);
+                    if let Some(code) = status.code() {
+                        gst::info!(CAT, imp = self, "Process (PID: {}) exited with code {}", pid, code);
+                    } else {
+                        gst::info!(CAT, imp = self, "Process (PID: {}) terminated by signal", pid);
+                    }
                 }
                 Err(err) => {
-                    gst::warning!(CAT, "Failed to wait for child process: {}", err);
+                    gst::warning!(CAT, imp = self, "Failed to wait for child process (PID: {}): {}", pid, err);
                 }
             }
         }
 
-        // Drain stderr
-        if let Some(rx) = state.stderr_rx.take() {
-            while let Ok(line) = rx.try_recv() {
-                gst::debug!(CAT, "Process stderr: {}", line);
-            }
+        // Join stdout and stderr threads
+        if let Some(thread) = state.stdout_thread.take() {
+            thread.join().unwrap();
         }
 
-        // Join stderr thread
         if let Some(thread) = state.stderr_thread.take() {
             thread.join().unwrap();
         }
@@ -253,17 +288,41 @@ impl BaseSinkImpl for VideoPipeSink {
 
     fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
         let mut state = self.state.lock().unwrap();
+
         let Some(_) = state.video_info else {
+            gst::error!(CAT, imp = self, "Video info not set");
             return Err(gst::FlowError::NotNegotiated);
         };
 
-        // Get child process
+        // Get child process and check if it's still running
         let child = match &mut state.child_process {
-            Some(c) => c,
+            Some(c) => {
+                // Try to get status without waiting
+                match c.try_wait() {
+                    Ok(Some(status)) => {
+                        let pid = c.id();
+                        // Process has exited unexpectedly
+                        gst::error!(CAT, imp = self, "Subprocess (PID: {}) exited unexpectedly", pid);
+
+                        if let Some(code) = status.code() {
+                            gst::error!(CAT, imp = self, "Exit code: {}", code);
+                        } else {
+                            gst::error!(CAT, imp = self, "Process terminated by signal");
+                        }
+
+                        return Err(gst::FlowError::Error);
+                    }
+                    Ok(None) => c, // Process still running
+                    Err(e) => {
+                        gst::error!(CAT, imp = self, "Failed to check subprocess status: {}", e);
+                        return Err(gst::FlowError::Error);
+                    }
+                }
+            }
             None => {
                 gst::error!(CAT, imp = self, "Child process not started");
-                return Err(gst::FlowError::Error)
-            },
+                return Err(gst::FlowError::Error);
+            }
         };
 
         // Map buffer for reading
@@ -286,18 +345,11 @@ impl BaseSinkImpl for VideoPipeSink {
                     gst::error!(CAT, imp = self, "Failed to flush stdin: {}", e);
                     return Err(gst::FlowError::Error);
                 }
-                gst::debug!(CAT, imp = self, "Wrote and flushed buffer of size {}", mapped_buffer.size());
+                gst::trace!(CAT, imp = self, "Wrote and flushed buffer of size {}", mapped_buffer.size());
             }
             Err(e) => {
                 gst::error!(CAT, imp = self, "Failed to write to process stdin: {}", e);
                 return Err(gst::FlowError::Error);
-            }
-        }
-
-        // Check for stderr
-        if let Some(ref rx) = state.stderr_rx {
-            while let Ok(line) = rx.try_recv() {
-                gst::debug!(CAT, imp = self, "Process stderr: {}", line);
             }
         }
 
