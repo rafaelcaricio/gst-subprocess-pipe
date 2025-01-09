@@ -30,9 +30,10 @@ cargo build --release
 The element can be used in GStreamer pipelines by specifying the `cmd` property:
 
 ```bash
-# Basic example converting video to grayscale using ffmpeg
-gst-launch-1.0 videotestsrc ! videoconvert ! video/x-raw,format=GRAY8 ! \
-    videopipesink cmd="ffmpeg -i pipe:0 -c:v libx264 output.mp4"
+# Basic example converting video to ffmpeg
+GST_PLUGIN_PATH=$PWD/target/debug GST_DEBUG=videopipesink:4 \
+gst-launch-1.0 videotestsrc is-live=true ! videoconvert ! video/x-raw,format=I420,framerate=30/1 ! \
+ videopipesink cmd="ffmpeg -hide_banner -f rawvideo -pix_fmt yuv420p -s 320x240 -r 30 -i - -c:v libx264 -preset medium -movflags +faststart -f mp4 -y output.mp4"
 
 # Process frames with a Python script
 gst-launch-1.0 v4l2src ! videoconvert ! video/x-raw,format=RGB ! \
