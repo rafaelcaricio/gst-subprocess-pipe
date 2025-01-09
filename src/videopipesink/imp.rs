@@ -165,10 +165,19 @@ impl BaseSinkImpl for VideoPipeSink {
             ));
         }
 
+        // Get current working directory
+        let current_dir = std::env::current_dir().map_err(|e| {
+            gst::error_msg!(
+                gst::ResourceError::Failed,
+                ["Failed to get current directory: {}", e]
+            )
+        })?;
+
         // Create command
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(&settings.cmd)
+            .current_dir(current_dir)
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -243,37 +252,14 @@ impl BaseSinkImpl for VideoPipeSink {
     }
 
     fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
-        let state = &mut self.state.lock().unwrap();
-
-        // Get the running time when this buffer should be rendered
-        // let base_time = self.obj().base_time().unwrap();
-        // let clock = self.obj().clock();
-
-        // if let Some(clock) = clock {
-        //     // Calculate the running time when this buffer should be rendered
-        //     let running_time = buffer
-        //         .pts()
-        //         .opt_add(base_time)
-        //         .unwrap_or(gst::ClockTime::ZERO);
-
-        //     gst::debug!(CAT, imp = self, "Waiting for running time: {}", running_time);
-
-        //     // Wait until the running time is reached
-        //     let (wait_result, _jitter) = clock.new_single_shot_id(running_time).wait();
-
-        //     wait_result.map_err(|_| {
-        //         gst::error!(CAT, imp = self, "Failed to wait for running time");
-        //         gst::FlowError::Error
-        //     })?;
-        // }
-
-        let _video_info = match state.video_info {
-            Some(ref i) => i,
-            None => return Err(gst::FlowError::NotNegotiated),
+        let mut state = self.state.lock().unwrap();
+        let Some(_) = state.video_info else {
+            return Err(gst::FlowError::NotNegotiated);
         };
 
-        let child = match state.child_process {
-            Some(ref mut c) => c,
+        // Get child process
+        let child = match &mut state.child_process {
+            Some(c) => c,
             None => {
                 gst::error!(CAT, imp = self, "Child process not started");
                 return Err(gst::FlowError::Error)
@@ -292,11 +278,21 @@ impl BaseSinkImpl for VideoPipeSink {
             gst::FlowError::Error
         })?;
 
-        stdin.write_all(&mapped_buffer).map_err(|_| {
-            gst::error!(CAT, imp = self, "Failed to write to process stdin");
-            gst::FlowError::Error
-        })?;
-        gst::info!(CAT, imp = self, "Wrote buffer to process stdin");
+        // Write frame data
+        match stdin.write_all(&mapped_buffer) {
+            Ok(_) => {
+                // Flush to ensure data is sent immediately
+                if let Err(e) = stdin.flush() {
+                    gst::error!(CAT, imp = self, "Failed to flush stdin: {}", e);
+                    return Err(gst::FlowError::Error);
+                }
+                gst::debug!(CAT, imp = self, "Wrote and flushed buffer of size {}", mapped_buffer.size());
+            }
+            Err(e) => {
+                gst::error!(CAT, imp = self, "Failed to write to process stdin: {}", e);
+                return Err(gst::FlowError::Error);
+            }
+        }
 
         // Check for stderr
         if let Some(ref rx) = state.stderr_rx {
