@@ -66,6 +66,18 @@ Enable debug output to see subprocess stderr and element state:
 GST_DEBUG=videopipesink:4 gst-launch-1.0 ...
 ```
 
+## Example GStreamer App
+
+An example GStreamer app using the `videopipesink` plugin is provided in the `examples` directory. The example sets up a GStreamer pipeline and uses the `videopipesink` element to pipe raw video frames to an `ffmpeg` command.
+
+### Running the Example
+
+To run the example, use the following command:
+
+```bash
+cargo run --example ffmpegsub
+```
+
 ## License
 
 This project is licensed under the Mozilla Public License 2.0.
