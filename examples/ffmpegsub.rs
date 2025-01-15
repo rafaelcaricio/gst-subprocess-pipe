@@ -6,9 +6,9 @@ fn main() {
     gst::init().unwrap();
 
     // Create the elements
-    let src = ElementFactory::make("videotestsrc", None).unwrap();
-    let convert = ElementFactory::make("videoconvert", None).unwrap();
-    let sink = ElementFactory::make("videopipesink", None).unwrap();
+    let src = gst::ElementFactory::make("videotestsrc").build().unwrap();
+    let convert = gst::ElementFactory::make("videoconvert").build().unwrap();
+    let sink = gst::ElementFactory::make("videopipesink").build().unwrap();
 
     // Set the properties
     src.set_property("is-live", &true).unwrap();
