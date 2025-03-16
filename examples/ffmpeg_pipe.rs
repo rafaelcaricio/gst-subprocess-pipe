@@ -6,22 +6,8 @@ fn main() {
     // Initialize GStreamer
     gst::init().unwrap();
     
-    // Load the plugin
-    let plugin = gst::Plugin::load_file(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(if cfg!(debug_assertions) { "debug" } else { "release" })
-            .join(if cfg!(target_os = "windows") {
-                "libgstsubprocesspipe.dll"
-            } else if cfg!(target_os = "macos") {
-                "libgstsubprocesspipe.dylib"
-            } else {
-                "libgstsubprocesspipe.so"
-            }),
-    ).expect("Failed to load plugin");
-    
-    // Register the plugin
-    gst::Registry::get().add_plugin(&plugin).expect("Failed to register plugin");
+    // Register the element directly
+    gstsubprocesspipe::register_element().unwrap();
 
     // Create a simple pipeline
     let pipeline = gst::Pipeline::new();
