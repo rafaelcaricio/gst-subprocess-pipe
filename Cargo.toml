@@ -3,20 +3,23 @@ name = "gst-subprocess-pipe"
 description = "GStreamer plugin for subprocess pipe operations"
 authors = ["Rafael Caricio <rafael@caricio.com>"]
 repository = "https://github.com/rafaelcaricio/gst-subprocess-pipe"
+homepage = "https://github.com/rafaelcaricio/gst-subprocess-pipe"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
 publish = ["crates-io"]
 rust-version = "1.83.0"
 
+
 [dependencies]
-gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main" }
-gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main", features = ["v1_22"] }
-gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs", branch = "main" }
+gst = { package = "gstreamer", version = "0.23.5" }
+gst-base = { package = "gstreamer-base", version = "0.23.5", features = ["v1_22"] }
+gst-video = { package = "gstreamer-video", version = "0.23.5" }
 once_cell = "1.20.2"
 libc = "0.2"
 
 [dev-dependencies]
+gst-check = { package = "gstreamer-check", version = "0.23.5" }
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3.4"
 env_logger = "0.11"
@@ -24,6 +27,7 @@ bytes = "1.5.0"
 thiserror = "2"
 serde_json = "1.0"
 anyhow = "1.0"
+serial_test = "3.0"
 
 [profile.release]
 lto = "thin"
@@ -41,7 +45,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [build-dependencies]
-gst-plugin-version-helper = "0.8.1"
+gst-plugin-version-helper = "0.8.2"
 
 [features]
 static = []

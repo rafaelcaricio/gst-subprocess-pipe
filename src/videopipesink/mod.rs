@@ -23,3 +23,13 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
         VideoPipeSink::static_type(),
     )
 }
+
+// Function used for direct element registration during testing
+pub fn register_element() -> Result<(), glib::BoolError> {
+    gst::Element::register(
+        None,
+        "videopipesink",
+        gst::Rank::NONE,
+        VideoPipeSink::static_type(),
+    )
+}

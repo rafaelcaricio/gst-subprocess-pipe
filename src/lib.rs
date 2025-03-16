@@ -2,6 +2,11 @@ mod videopipesink;
 
 use gst::glib;
 
+// Used for testing to directly register the element without requiring the plugin loading
+pub fn register_element() -> Result<(), glib::BoolError> {
+    videopipesink::register_element()
+}
+
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     videopipesink::register(plugin)
 }
